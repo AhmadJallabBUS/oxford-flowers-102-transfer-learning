@@ -10,7 +10,8 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         INPUT PIPELINE                              │
-│  TF Datasets  →  Resize  →  Normalize  →  Augment  →  Batch/Cache  │
+│   TF Datasets  →  Resize  →  Cast to float32  →  Preprocess  →     │
+│   Augment (Train only)  →  Batch & Prefetch (No caching in code)    │
 └───────────────────────────────┬─────────────────────────────────────┘
                                 │
                ┌────────────────┴─────────────────┐
@@ -33,7 +34,7 @@
                ▼                                  ▼
    ┌───────────────────────┐          ┌───────────────────────┐
    │  Phase 2: Fine-tune   │          │  Phase 2: Fine-tune   │
-   │  (top N layers unfrz) │          │  (top N layers unfrz) │
+   │  (last 20 layers unfrz)│          │  (last 20 layers unfrz)│
    └───────────┬───────────┘          └───────────┬───────────┘
                │                                  │
                └────────────────┬─────────────────┘
@@ -46,7 +47,7 @@
                                 ▼
                ┌────────────────────────────────┐
                │    SELECT BEST MODEL           │
-               │    → Final Contest Predictions │
+               │    → Save Test Predictions     │
                └────────────────────────────────┘
 ```
 
@@ -54,28 +55,27 @@
 
 ## 2. Project File Structure
 
+The real implementation is structured as a consolidated notebook with outputs written to an `outputs` directory:
+
 ```
 project/
-├── data/                        # auto-downloaded by tfds
-├── notebooks/
-│   ├── 01_data_exploration.ipynb
-│   ├── 02_mobilenetv2.ipynb
-│   ├── 03_resnet50v2.ipynb
-│   └── 04_evaluation_final.ipynb
-├── src/
-│   ├── data_pipeline.py         # dataset loading, augmentation, splits
-│   ├── model_builder.py         # build_model(backbone_name, ...)
-│   ├── trainer.py               # two-phase training loop
-│   └── evaluate.py              # metrics, confusion matrix, error analysis
-├── outputs/
-│   ├── mobilenetv2_history.json
-│   ├── resnet50v2_history.json
-│   ├── mobilenetv2_metrics.json
-│   ├── resnet50v2_metrics.json
-│   ├── confusion_matrix_*.png
-│   └── final_predictions.csv
-├── README.md
-└── requirements.txt
+├── Project Description Spring 2026 1.pdf   # Course project specification guidelines
+├── SYSTEM_ARCHITECTURE.md                 # Project architecture and implementation specs
+├── cell_check_output-v1.md                # Markdown log containing execution outputs of training
+├── flowers102_classifier.ipynb            # Consolidated notebook with the entire training/evaluation pipeline
+├── mobilenetv2-trainingAccuracy-v1.png    # Pre-generated training accuracy curve (v1)
+├── resnet50-trainingAccuracy-v1.png       # Pre-generated training accuracy curve (v1)
+├── outputs/                               # Output directory automatically created by code
+│   ├── best_MobileNetV2.keras             # Best saved checkpoint for MobileNetV2 (monitors val_accuracy)
+│   ├── best_ResNet50V2.keras              # Best saved checkpoint for ResNet50V2 (monitors val_accuracy)
+│   ├── curves_MobileNetV2.png             # Epoch vs Accuracy training curves for MobileNetV2
+│   ├── curves_ResNet50V2.png              # Epoch vs Accuracy training curves for ResNet50V2
+│   ├── confusion_matrix_MobileNetV2.png   # Log-scale validation confusion matrix heatmap (for the best model)
+│   └── final_predictions.csv              # Test set model predictions containing 'predicted' and 'true' columns
+└── other project option2/                 # Alternative proposal materials
+    ├── Proposal_Parathyroid_CV.docx
+    ├── Proposal_Parathyroid_CV.pdf
+    └── proposal.md
 ```
 
 ---
@@ -84,55 +84,61 @@ project/
 
 ### 3.1 Dataset Loading
 
-```python
-# via TensorFlow Datasets (recommended)
-import tensorflow_datasets as tfds
+Dataset is loaded using TensorFlow Datasets:
 
+```python
 (ds_train, ds_val, ds_test), info = tfds.load(
     'oxford_flowers102',
     split=['train', 'validation', 'test'],
     as_supervised=True,
     with_info=True
 )
-# Splits: train=1020, val=1020, test=6149  (102 classes)
+# Splits: train=1020, val=1020, test=6149 (102 classes)
 ```
 
 ### 3.2 Preprocessing
 
-| Step | Train | Val / Test |
-|------|-------|------------|
-| Resize | 224×224 | 224×224 |
-| Normalize | `/255.0` → `[0,1]` | `/255.0` → `[0,1]` |
-| Backbone preprocess | `preprocess_input()` | `preprocess_input()` |
+| Step | Train Pipeline | Val / Test Pipeline |
+|------|----------------|---------------------|
+| Resize | `224×224` | `224×224` |
+| Cast | `tf.float32` | `tf.float32` |
+| Normalization | Backbone preprocess function | Backbone preprocess function |
+| Shuffling | `shuffle(1024)` | None |
+| Augmentation | Enabled | Disabled |
+| Batch Size | `32` | `32` |
+| Prefetch | `tf.data.AUTOTUNE` | `tf.data.AUTOTUNE` |
 
-> Each backbone has its own `preprocess_input` (MobileNetV2 scales to `[-1,1]`; ResNet50V2 does channel-wise mean subtraction). Apply **after** resize, **before** augmentation on val/test.
+> Backbone-specific preprocessing handles appropriate scaling: MobileNetV2 normalizes inputs to `[-1, 1]` while ResNet50V2 performs channel-wise zero-centering using ImageNet stats.
 
 ### 3.3 Data Augmentation (train only)
 
 ```python
 augment = tf.keras.Sequential([
-    tf.keras.layers.RandomFlip("horizontal"),
+    tf.keras.layers.RandomFlip('horizontal'),
     tf.keras.layers.RandomRotation(0.2),
     tf.keras.layers.RandomZoom(0.15),
-    tf.keras.layers.RandomTranslation(0.1, 0.1),
-    tf.keras.layers.RandomBrightness(0.1),
-    tf.keras.layers.RandomContrast(0.1),
 ])
 ```
 
 ### 3.4 Pipeline Assembly
 
 ```python
+AUTOTUNE = tf.data.AUTOTUNE
 BATCH_SIZE = 32
-AUTOTUNE   = tf.data.AUTOTUNE
+IMG_SIZE = 224
 
-def build_pipeline(ds, training=False):
+def make_pipeline(ds, preprocess_fn, training=False):
+    def prep(img, label):
+        img = tf.image.resize(img, [IMG_SIZE, IMG_SIZE])
+        img = tf.cast(img, tf.float32)
+        img = preprocess_fn(img)
+        return img, label
+
+    ds = ds.map(prep, num_parallel_calls=AUTOTUNE)
     if training:
-        ds = ds.map(augment, num_parallel_calls=AUTOTUNE)
-    return (ds
-        .batch(BATCH_SIZE)
-        .prefetch(AUTOTUNE)
-        .cache())        # cache after first epoch on Colab
+        ds = ds.shuffle(1024)
+        ds = ds.map(lambda x, y: (augment(x, training=True), y), num_parallel_calls=AUTOTUNE)
+    return ds.batch(BATCH_SIZE).prefetch(AUTOTUNE)
 ```
 
 ---
@@ -141,37 +147,34 @@ def build_pipeline(ds, training=False):
 
 ### 4.1 Shared Classifier Head
 
-Both backbones use the same head design for a **fair comparison**:
+To ensure a fair comparison, both models append the exact same classifier head design:
 
 ```
-Backbone (frozen or partially unfrozen)
+Backbone (MobileNetV2 or ResNet50V2)
     └── GlobalAveragePooling2D
-        └── BatchNormalization
-            └── Dense(512, activation='relu')
-                └── Dropout(0.4)
-                    └── Dense(256, activation='relu')
-                        └── Dropout(0.3)
-                            └── Dense(102, activation='softmax')
+        └── Dense(256, activation='relu')
+            └── Dropout(0.4)
+                └── Dense(102, activation='softmax')
 ```
 
 ### 4.2 Model A — MobileNetV2
 
 | Property | Value |
 |----------|-------|
-| Input shape | (224, 224, 3) |
+| Input shape | `(224, 224, 3)` |
 | Backbone params | ~2.3 M |
-| Total trainable (head only) | ~400 K |
-| Fine-tune layers | last 30 layers unfrozen in phase 2 |
+| Head Trainable params | ~355 K (dense layers) |
+| Fine-tune layers | Last 20 layers of backbone unfrozen in Phase 2 |
 | Backbone preprocess | `tf.keras.applications.mobilenet_v2.preprocess_input` |
 
 ### 4.3 Model B — ResNet50V2
 
 | Property | Value |
 |----------|-------|
-| Input shape | (224, 224, 3) |
+| Input shape | `(224, 224, 3)` |
 | Backbone params | ~23.5 M |
-| Total trainable (head only) | ~400 K |
-| Fine-tune layers | last 50 layers unfrozen in phase 2 |
+| Head Trainable params | ~550 K (dense layers) |
+| Fine-tune layers | Last 20 layers of backbone unfrozen in Phase 2 |
 | Backbone preprocess | `tf.keras.applications.resnet_v2.preprocess_input` |
 
 ---
@@ -183,47 +186,41 @@ Backbone (frozen or partially unfrozen)
 ```
 Phase 1 — Feature Extraction
 ─────────────────────────────
-  Backbone:  FROZEN (include_top=False, weights='imagenet')
+  Backbone:  FROZEN (trainable=False, weights='imagenet')
   Train:     classifier head only
-  Optimizer: Adam(lr=1e-3)
-  Epochs:    15–20
-  Goal:      warm up the new head without destroying pretrained weights
+  Optimizer: Adam(learning_rate=1e-3)
+  Loss:      sparse_categorical_crossentropy
+  Epochs:    15 epochs
+  Goal:      Train classification head weights without modifying backbone weights
 
 Phase 2 — Fine-Tuning
 ──────────────────────
-  Backbone:  top N layers UNFROZEN (see per-model above)
-  Train:     unfrozen backbone layers + head
-  Optimizer: Adam(lr=1e-5)   ← much lower LR to avoid catastrophic forgetting
-  Epochs:    20–30
-  Goal:      adapt high-level features to flower-specific patterns
+  Backbone:  Last 20 layers of backbone set to trainable=True, rest remain FROZEN
+  Train:     Unfrozen backbone layers + classifier head
+  Optimizer: Adam(learning_rate=1e-5) (low learning rate to prevent catastrophic forgetting)
+  Loss:      sparse_categorical_crossentropy
+  Epochs:    20 epochs
+  Goal:      Refine high-level feature extraction filters for Oxford Flowers 102 patterns
 ```
 
 ### 5.2 Callbacks
 
+Both phases use Early Stopping and Checkpointing to ensure training stability:
+
 ```python
-callbacks = [
+callbacks=[
+    tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True),
     tf.keras.callbacks.ModelCheckpoint(
-        filepath='best_{backbone}.keras',
-        monitor='val_macro_f1',
+        filepath=f'outputs/best_{name}.keras',
         save_best_only=True,
-        mode='max'
-    ),
-    tf.keras.callbacks.EarlyStopping(
-        monitor='val_loss',
-        patience=7,
-        restore_best_weights=True
-    ),
-    tf.keras.callbacks.ReduceLROnPlateau(
-        monitor='val_loss',
-        factor=0.5,
-        patience=3,
-        min_lr=1e-7
-    ),
-    tf.keras.callbacks.CSVLogger('training_log_{backbone}.csv')
+        monitor='val_accuracy'
+    )
 ]
 ```
 
 ### 5.3 Loss & Metrics
+
+The network is compiled to monitor `accuracy` during training. Macro-averaged metrics are calculated post-training:
 
 ```python
 model.compile(
@@ -231,112 +228,79 @@ model.compile(
     optimizer=optimizer,
     metrics=['accuracy']
 )
-# Macro F1 tracked separately via sklearn after each epoch (or custom metric)
 ```
 
 ---
 
 ## 6. Evaluation Module
 
-### 6.1 Metrics Computed on Test Set
+### 6.1 Metrics Computed on Validation / Test Set
+
+Validation and test predictions are loaded from the best checkpoint and metrics are computed macro-averaged:
 
 ```python
-from sklearn.metrics import (
-    accuracy_score, precision_score,
-    recall_score, f1_score,
-    classification_report, confusion_matrix
-)
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 metrics = {
-    'accuracy':          accuracy_score(y_true, y_pred),
-    'macro_precision':   precision_score(y_true, y_pred, average='macro'),
-    'macro_recall':      recall_score(y_true, y_pred, average='macro'),
-    'macro_f1':          f1_score(y_true, y_pred, average='macro'),   # PRIMARY contest metric
+    'accuracy':  accuracy_score(y_true, y_pred),
+    'precision': precision_score(y_true, y_pred, average='macro', zero_division=0),
+    'recall':    recall_score(y_true, y_pred, average='macro', zero_division=0),
+    'f1':        f1_score(y_true, y_pred, average='macro', zero_division=0),
 }
 ```
 
-### 6.2 Outputs
+### 6.2 Outputs Generated
 
-- **Comparison table** — side-by-side metrics for MobileNetV2 vs ResNet50V2
-- **Confusion matrix** — 102×102 heatmap (log-scale for readability)
-- **Per-class report** — highlight top-5 worst-performing classes
-- **Error analysis** — show misclassified samples with true vs predicted label
-- **Training curves** — loss and accuracy per epoch for both phases
+- **Model Comparison Table**: Compares validation metrics of both model families.
+- **Confusion Matrix**: Logs a 102x102 heatmap using `np.log1p(cm)` to visualize misclassification distribution.
+- **Training Curves**: Generates accuracy progression plots (`outputs/curves_{name}.png`).
+- **Predictions CSV**: Saves a dataframe with `predicted` and `true` columns for test evaluation.
 
 ---
 
 ## 7. Experiment Tracking
 
-All experiments are logged to CSV and JSON. Compare across runs:
+### Model Performance (Validation Set Results)
 
-| Experiment | Backbone | LR Phase1 | LR Phase2 | Augment | Val F1 | Test F1 |
-|------------|----------|-----------|-----------|---------|--------|---------|
-| baseline   | MobileNetV2 | 1e-3 | — | none | — | — |
-| exp-01     | MobileNetV2 | 1e-3 | 1e-5 | standard | — | — |
-| exp-02     | ResNet50V2  | 1e-3 | 1e-5 | standard | — | — |
-| exp-03     | best model  | 1e-3 | 1e-5 | extended | — | — |
+According to execution logs (`cell_check_output-v1.md`), MobileNetV2 slightly outperformed ResNet50V2 on the validation set (primarily due to macro F1-score performance):
+
+| Model | Phase 1 LR | Phase 2 LR | Fine-Tune Layers | Val Accuracy | Val Precision | Val Recall | Val F1-score |
+|---|---|---|---|---|---|---|---|
+| **MobileNetV2** (Best) | `1e-3` | `1e-5` | Last 20 | **0.7765** | **0.8175** | **0.7765** | **0.7776** |
+| **ResNet50V2** | `1e-3` | `1e-5` | Last 20 | 0.7618 | 0.7918 | 0.7618 | 0.7521 |
 
 ---
 
 ## 8. Final Prediction Generation
 
+Predictions are executed on the test dataset using the best model determined by F1-score:
+
 ```python
-# Load best saved model
-best_model = tf.keras.models.load_model('best_resnet50v2.keras')  # or mobilenetv2
+test_ds = make_pipeline(ds_test, best_preprocess, training=False)
 
-# Run on test set
-y_pred = np.argmax(best_model.predict(ds_test), axis=1)
+y_true_test, y_pred_test = [], []
+for imgs, labels in test_ds:
+    preds = best_model.predict(imgs, verbose=0)
+    y_pred_test.extend(np.argmax(preds, axis=1))
+    y_true_test.extend(labels.numpy())
+y_true_test = np.array(y_true_test)
+y_pred_test = np.array(y_pred_test)
 
-# Save contest submission
-pd.DataFrame({'image_id': test_ids, 'label': y_pred}).to_csv(
+# Save predictions for test evaluation
+pd.DataFrame({'predicted': y_pred_test, 'true': y_true_test}).to_csv(
     'outputs/final_predictions.csv', index=False
 )
 ```
 
 ---
 
-## 9. Implementation Notes
+## 9. Deliverables Checklist
 
-### Colab / Kaggle Compatibility
-- Use `tfds.load()` — handles download, split, and caching automatically.
-- Enable GPU: `Runtime → Change runtime type → T4 GPU`.
-- Cache the dataset after the first epoch to avoid re-reading from disk.
-- Save checkpoints to Google Drive to survive session resets.
-
-### Fairness Constraints
-- Test set is used **only** for final evaluation — never for tuning.
-- Both models trained with identical augmentation, batch size, and head design.
-- All hyperparameter decisions made using validation set only.
-
-### Class Imbalance
-- Oxford Flowers 102 default splits are small (1020 train images, 10 per class).
-- Augmentation is especially important given the tiny training set.
-- Consider `class_weight` in `model.fit()` if val F1 shows highly skewed per-class performance.
-
----
-
-## 10. Deliverables Checklist
-
-- [ ] `01_data_exploration.ipynb` — dataset stats, sample images, class distribution
-- [ ] `02_mobilenetv2.ipynb` — full training + evaluation of MobileNetV2
-- [ ] `03_resnet50v2.ipynb` — full training + evaluation of ResNet50V2
-- [ ] `04_evaluation_final.ipynb` — comparison table, confusion matrices, error analysis, final predictions
-- [ ] `outputs/final_predictions.csv` — contest submission file
-- [ ] `README.md` — setup and run instructions
-- [ ] Report (4–6 pages) — problem, data, models, experiments, results, conclusions
-- [ ] Presentation (10 min)
-
----
-
-## 11. Technology Stack
-
-| Component | Library / Tool |
-|-----------|---------------|
-| Language | Python 3.10+ |
-| Deep Learning | TensorFlow 2.x / Keras |
-| Dataset | TensorFlow Datasets (`tensorflow-datasets`) |
-| Backbones | `tf.keras.applications.MobileNetV2`, `ResNet50V2` |
-| Metrics | scikit-learn |
-| Visualization | matplotlib, seaborn |
-| Experiment logging | CSV + JSON |
-| Compute | Google Colab (T4 GPU) or Kaggle (P100) |
+- [x] `flowers102_classifier.ipynb` — Consolidated notebook implementing data prep, training, and evaluation pipeline
+- [x] `SYSTEM_ARCHITECTURE.md` — Updated architecture document representing the actual implementation state
+- [x] `cell_check_output-v1.md` — Notebook execution log for MobileNetV2 and ResNet50V2
+- [x] `mobilenetv2-trainingAccuracy-v1.png` & `resnet50-trainingAccuracy-v1.png` — Pre-generated training curves
+- [x] `outputs/final_predictions.csv` — Generated final test set predictions with `predicted` and `true` labels
+- [ ] Setup and run instructions README
+- [ ] Computer Vision Course Report (4-6 pages)
+- [ ] Presentation Slides (10 mins)
