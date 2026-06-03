@@ -1,0 +1,461 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+% The preceding line is only needed to identify funding in the first footnote. If that is unneeded, please comment it out.
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{float}
+\usepackage{caption}
+
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+\lstdefinestyle{python}{
+  language=Python,
+  basicstyle=\ttfamily\tiny, % Smaller font for 2-column
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{orange},
+  showstringspaces=false,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  stepnumber=1,
+  numbersep=4pt,
+  frame=single,
+  breaklines=true,
+  postbreak=\raisebox{0ex}[0ex][0ex]{\(\hookrightarrow\)\,},
+}
+
+\captionsetup[table]{justification=centering, singlelinecheck=false}
+
+\begin{document}
+
+\title{Bike Rental Prediction Using Machine Learning: A Comparative Study of Regression Models}
+
+\author{\IEEEauthorblockN{Ahmad Jamal Ahmed Jallab}
+\IEEEauthorblockA{\textit{University of the Jordan} \\
+Amman, Jordan \\
+8240339}
+}
+
+\maketitle
+
+\begin{abstract}
+Bike-sharing systems have become increasingly popular in urban areas as an eco-friendly transportation alternative. Accurate prediction of hourly bike rental demand is crucial for efficient resource allocation and service optimization. This study develops and compares three machine learning regression models to predict hourly bike rentals based on temporal and weather-related features. We implemented Ridge Regression (linear model), Support Vector Regression with RBF kernel (nonlinear model), and Multi-Layer Perceptron neural network, all with proper preprocessing pipelines and hyperparameter tuning via cross-validation. Our dataset comprises 8,645 hourly bike rental records with 7 features including temporal variables (month, hour, weekday) and weather conditions (temperature, humidity, windspeed, weather). Experimental results demonstrate that the Multi-Layer Perceptron achieved the best performance with a test RMSE of 41.06 bikes/hour and R² of 0.9055, representing a 59.9\% improvement over the Ridge Regression baseline. The model exhibits nearly unbiased predictions (mean residual = 1.66) and excellent generalization capabilities. This work validates the effectiveness of deep neural networks for bike-sharing demand forecasting and provides actionable insights for operators to optimize bike distribution, maintenance scheduling, and service quality.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Machine Learning, Bike Sharing, Regression, Neural Networks, Support Vector Machines, Ridge Regression, Demand Forecasting, Urban Mobility
+\end{IEEEkeywords}
+
+\section{Introduction}
+\label{intro}
+
+\subsection{Problem Statement}
+Bike-sharing systems have emerged as a sustainable solution to urban transportation challenges, reducing traffic congestion and carbon emissions while promoting public health. However, the success of these systems depends critically on maintaining optimal bike availability across stations. Overstocking leads to wasted resources and maintenance costs, while understocking results in customer dissatisfaction and lost revenue.
+
+Accurate prediction of hourly bike rental demand enables operators to:
+\begin{enumerate}
+    \item \textbf{Optimize resource allocation}: Distribute bikes across stations based on predicted demand patterns
+    \item \textbf{Plan maintenance schedules}: Schedule repairs during predicted low-demand periods
+    \item \textbf{Improve service quality}: Ensure bike availability during peak hours (morning/evening commutes)
+    \item \textbf{Reduce operational costs}: Minimize unnecessary bike redistribution trips
+\end{enumerate}
+
+This project addresses the challenge of predicting hourly bike rentals using machine learning regression techniques, comparing linear, kernel-based, and neural network approaches.
+
+\subsection{Dataset Description}
+The dataset contains hourly bike rental records for one full year, comprising \textbf{8,645 observations} with the following features:
+\begin{itemize}
+    \item \textbf{Temporal features}: month, hour, weekday
+    \item \textbf{Weather features}: weather condition, temperature, humidity, windspeed
+    \item \textbf{Target variable}: rented\_bikes (hourly rental count)
+    \item \textbf{Total features}: 7 input features
+\end{itemize}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\columnwidth]{"Distribution-of_Rented-Bikes-with-Outlayer-representative.png"}
+    \caption{Distribution of Rented Bikes (Target Variable)}
+    \label{fig:distribution}
+\end{figure}
+
+The dataset contains missing values in weather, temperature, and windspeed columns, which are handled through median and mode imputation in the preprocessing pipeline.
+
+\subsection{Objectives}
+\begin{enumerate}
+    \item Develop and tune at least three regression models (linear, nonlinear, and neural network)
+    \item Implement proper ML pipelines with preprocessing to prevent data leakage
+    \item Evaluate models using RMSE on a held-out test set (30\% split)
+    \item Identify the best-performing model for bike rental prediction
+    \item Analyze model behavior through residual analysis and performance metrics
+\end{enumerate}
+
+\section{Theoretical Background}
+\label{theory}
+
+\subsection{Ridge Regression}
+Ridge Regression is a linear regression variant that adds L2 regularization to prevent overfitting \cite{ridge}. The optimization objective is:
+\begin{equation}
+    \min_{\beta} \left\{ \sum_{i=1}^{n} (y_i - \beta_0 - \sum_{j=1}^{p} \beta_j x_{ij})^2 + \alpha \sum_{j=1}^{p} \beta_j^2 \right\}
+\end{equation}
+where $\alpha$ is the regularization parameter that controls the trade-off between fitting the training data and keeping model complexity low. The L2 penalty shrinks coefficients toward zero, reducing model variance at the cost of introducing some bias.
+
+\subsection{Support Vector Regression (SVR)}
+SVR extends Support Vector Machines to regression problems \cite{svr}. For nonlinear relationships, SVR uses the kernel trick to map inputs to a higher-dimensional space. The RBF (Radial Basis Function) kernel is defined as:
+\begin{equation}
+    K(x_i, x_j) = \exp(-\gamma \|x_i - x_j\|^2)
+\end{equation}
+The SVR optimization problem with $\epsilon$-insensitive loss is:
+\begin{equation}
+    \min_{w,b} \frac{1}{2}\|w\|^2 + C \sum_{i=1}^{n} (\xi_i + \xi_i^*)
+\end{equation}
+subject to constraints that allow errors within $\epsilon$ margin. The hyperparameters $C$, $\gamma$, and $\epsilon$ control model complexity, kernel width, and error tolerance respectively.
+
+\subsection{Multi-Layer Perceptron (MLP)}
+MLPs are feedforward artificial neural networks consisting of multiple layers of neurons \cite{mlp}. For a network with $L$ layers, the forward propagation is:
+\begin{equation}
+    h^{(l)} = f(W^{(l)} h^{(l-1)} + b^{(l)})
+\end{equation}
+where $h^{(l)}$ is the activation at layer $l$, $W^{(l)}$ and $b^{(l)}$ are weights and biases, and $f$ is the activation function. We use the hyperbolic tangent (tanh) activation:
+\begin{equation}
+    \tanh(x) = \frac{e^x - e^{-x}}{e^x + e^{-x}}
+\end{equation}
+The network is trained via backpropagation using gradient descent to minimize the mean squared error loss. L2 regularization (weight decay) with parameter $\alpha$ prevents overfitting.
+
+\section{Methodology}
+\label{methodology}
+
+\subsection{Data Preprocessing}
+
+\subsubsection{Missing Value Treatment}
+Missing values were handled using pipeline-based imputation to prevent data leakage:
+\begin{itemize}
+    \item \textbf{Numerical features}: Median imputation (robust to outliers)
+    \item \textbf{Categorical features}: Most frequent value imputation
+\end{itemize}
+
+\subsubsection{Feature Encoding}
+\begin{itemize}
+    \item \textbf{Categorical features} (month, weekday, weather): One-hot encoding with drop='first' to avoid multicollinearity
+    \item \textbf{Numerical features} (hour, temperature, humidity, windspeed): Standardization using StandardScaler to zero mean and unit variance
+\end{itemize}
+
+\subsubsection{Pipeline Architecture}
+All preprocessing was implemented using scikit-learn's \texttt{Pipeline} and \texttt{ColumnTransformer} to ensure:
+\begin{itemize}
+    \item No data leakage between training and test sets
+    \item Reproducibility and maintainability
+    \item Proper transformation of new data during prediction
+\end{itemize}
+
+\subsection{Train-Test Split}
+Following project requirements:
+\begin{itemize}
+    \item \textbf{Total samples}: 8,645
+    \item \textbf{Training set}: 6,051 samples (70\%)
+    \item \textbf{Test set}: 2,594 samples (30\%)
+    \item \textbf{Random state}: 25 (for reproducibility)
+\end{itemize}
+
+The test set was held out and used only once for final evaluation to ensure unbiased performance estimates.
+
+\subsection{Model Selection and Hyperparameter Tuning}
+
+\subsubsection{Ridge Regression}
+Ridge regression was selected as the linear model due to its L2 regularization capability.
+
+\textbf{Hyperparameters tuned:}
+\begin{itemize}
+    \item \texttt{alpha}: [0.001, 0.01, 0.1, 1, 10, 100, 1000]
+    \item \texttt{solver}: ['auto', 'svd', 'cholesky', 'lsqr']
+\end{itemize}
+
+\textbf{Tuning method}: GridSearchCV with 5-fold cross-validation
+
+\textbf{Best parameters}: $\alpha = 10$, solver = 'auto'
+
+\subsubsection{Support Vector Regression}
+SVR with RBF kernel can capture complex nonlinear relationships in the data.
+
+\textbf{Hyperparameters tuned:}
+\begin{itemize}
+    \item \texttt{kernel}: ['rbf', 'poly', 'linear']
+    \item \texttt{C}: [0.1, 1, 10, 100]
+    \item \texttt{gamma}: ['scale', 'auto', 0.001, 0.01, 0.1]
+    \item \texttt{epsilon}: [0.01, 0.1, 0.5, 1]
+\end{itemize}
+
+\textbf{Tuning method}: RandomizedSearchCV (20 iterations) with 5-fold cross-validation
+
+\textbf{Best parameters}: kernel = 'rbf', $C = 100$, $\gamma$ = 'scale', $\epsilon = 1$
+
+\subsubsection{Multi-Layer Perceptron}
+MLPRegressor provides a flexible neural network architecture for regression.
+
+\textbf{Hyperparameters tuned:}
+\begin{itemize}
+    \item \texttt{hidden\_layer\_sizes}: [(50,), (100,), (50, 50), (100, 50), (100, 100)]
+    \item \texttt{activation}: ['relu', 'tanh']
+    \item \texttt{alpha}: [0.0001, 0.001, 0.01]
+    \item \texttt{learning\_rate}: ['constant', 'adaptive']
+\end{itemize}
+
+\textbf{Tuning method}: GridSearchCV with 5-fold cross-validation
+
+\textbf{Best parameters}: hidden\_layer\_sizes = (100, 100), activation = 'tanh', $\alpha = 0.0001$, learning\_rate = 'constant'
+
+\subsection{Evaluation Metrics}
+We used multiple metrics to comprehensively evaluate model performance:
+
+\textbf{Root Mean Squared Error (RMSE):}
+\begin{equation}
+    RMSE = \sqrt{\frac{1}{n}\sum_{i=1}^{n}(y_i - \hat{y}_i)^2}
+\end{equation}
+
+\textbf{R² Score (Coefficient of Determination):}
+\begin{equation}
+    R^2 = 1 - \frac{\sum_{i=1}^{n}(y_i - \hat{y}_i)^2}{\sum_{i=1}^{n}(y_i - \bar{y})^2}
+\end{equation}
+
+\textbf{Mean Absolute Error (MAE):}
+\begin{equation}
+    MAE = \frac{1}{n}\sum_{i=1}^{n}|y_i - \hat{y}_i|
+\end{equation}
+
+RMSE was chosen as the primary metric because it penalizes larger errors more heavily than MAE, making it suitable for this application where large prediction errors could significantly impact service quality.
+
+\section{Experimental Results}
+\label{results}
+
+\subsection{Model Performance Comparison}
+
+Table \ref{tab:performance} presents the comprehensive performance comparison of all three models across training, cross-validation, and test sets.
+
+\begin{table}[htbp]
+  \caption{Model Performance Comparison}
+  \begin{center}
+  \begin{tabular}{l c c c c c}
+    \toprule
+    \textbf{Model} & \textbf{Test RMSE} & \textbf{Test R²} & \textbf{Test MAE} \\
+    \midrule
+    Ridge Regression & 102.38 & 0.4123 & 77.41 \\
+    SVR (RBF) & 84.53 & 0.5994 & 50.46 \\
+    \textbf{MLP} & \textbf{41.06} & \textbf{0.9055} & \textbf{26.42} \\
+    \bottomrule
+  \end{tabular}
+  \label{tab:performance}
+  \end{center}
+\end{table}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\columnwidth]{"Bar plot comparing models RMSE.png"}
+    \caption{RMSE Comparison of Ridge, SVR, and MLP Models}
+    \label{fig:rmse_comparison}
+\end{figure}
+
+\textbf{Performance Improvements (vs Ridge Regression):}
+\begin{itemize}
+    \item SVR: 17.4\% RMSE reduction, 45.5\% improvement in R²
+    \item \textbf{MLP: 59.9\% RMSE reduction, 119.6\% improvement in R²}
+\end{itemize}
+
+\subsection{Best Model Analysis}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\columnwidth]{"output_ Actual_Predicted plots for all models.png"}
+    \caption{Actual vs Predicted Bike Rentals for All Models}
+    \label{fig:actual_vs_predicted}
+\end{figure}
+
+The \textbf{Multi-Layer Perceptron (MLP)} achieved the best performance with:
+\begin{itemize}
+    \item \textbf{Test RMSE}: 41.06 bikes/hour
+    \item \textbf{Test R²}: 0.9055 (explains 90.55\% of variance)
+    \item \textbf{Test MAE}: 26.42 bikes/hour
+\end{itemize}
+
+\subsubsection{Generalization Analysis}
+The MLP model demonstrates excellent generalization:
+\begin{itemize}
+    \item Training RMSE: 31.10 $\rightarrow$ CV RMSE: 44.28 $\rightarrow$ Test RMSE: 41.06
+    \item Test performance is \textbf{better than CV}, indicating robust generalization
+    \item The model successfully learned patterns that generalize to unseen data
+\end{itemize}
+
+\subsubsection{Model Architecture}
+The optimal MLP configuration consists of:
+\begin{itemize}
+    \item Two hidden layers with 100 neurons each (100, 100)
+    \item Tanh activation function (captures nonlinear relationships)
+    \item L2 regularization ($\alpha = 0.0001$)
+    \item Constant learning rate
+\end{itemize}
+
+\subsubsection{Residual Analysis}
+Table \ref{tab:residuals} presents the residual statistics for the best model.
+
+\begin{table}[htbp]
+  \caption{MLP Residual Statistics}
+  \begin{center}
+  \begin{tabular}{l c}
+    \toprule
+    \textbf{Metric} & \textbf{Value} \\
+    \midrule
+    Mean Residual & 1.66 bikes/hour \\
+    Residual Std Dev & 41.03 bikes/hour \\
+    Mean Absolute Error & 26.42 bikes/hour \\
+    Test R² & 0.9055 \\
+    \bottomrule
+  \end{tabular}
+  \label{tab:residuals}
+  \end{center}
+\end{table}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\columnwidth]{"Residual plots for the best model.png"}
+    \caption{Residual Analysis for Best Model (MLP)}
+    \label{fig:residuals}
+\end{figure}
+
+\textbf{Interpretation:}
+\begin{itemize}
+    \item Mean residual near zero (1.66) indicates the model is \textbf{nearly unbiased} with no systematic over/under-prediction
+    \item Residual standard deviation (41.03) is consistent with RMSE (41.06), confirming normally distributed errors
+    \item The model captures complex temporal and weather patterns effectively
+    \item Residual distribution suggests consistent performance across different demand levels
+\end{itemize}
+
+\section{Discussion}
+\label{discussion}
+
+\subsection{Why MLP Outperformed Other Models}
+
+\textbf{1. Nonlinear Capacity}: The two-layer architecture with tanh activation captured complex interactions between temporal and weather features that linear models cannot represent. For example, the relationship between temperature and rentals is nonlinear (optimal at moderate temperatures) and varies by hour and season.
+
+\textbf{2. Optimal Architecture}: The (100, 100) hidden layer configuration provided sufficient capacity to learn hierarchical feature representations without excessive overfitting. The first layer learns basic patterns (e.g., ``high temperature increases rentals''), while the second layer combines these into complex rules (e.g., ``high temperature at 8 AM on weekdays indicates commute demand'').
+
+\textbf{3. Effective Hyperparameter Tuning}: GridSearchCV with 5-fold cross-validation identified the best combination of activation function, regularization strength, and learning rate. The tanh activation outperformed ReLU for this problem, likely because it handles negative standardized features better.
+
+\textbf{4. Feature Interactions}: Neural networks naturally learn feature interactions (e.g., hour $\times$ temperature, weekday $\times$ weather) without explicit feature engineering, which is crucial for bike rental patterns that depend on multiple simultaneous conditions.
+
+\subsection{Progressive Performance Gains}
+
+The improvement from Ridge to SVR to MLP demonstrates the value of increasing model complexity:
+\begin{itemize}
+    \item \textbf{Ridge $\rightarrow$ SVR}: 17.4\% improvement by adding RBF kernel (nonlinear transformations in feature space)
+    \item \textbf{SVR $\rightarrow$ MLP}: 51.4\% improvement by learning hierarchical representations through multiple layers
+    \item \textbf{Overall}: MLP achieved 59.9\% RMSE reduction compared to baseline Ridge model
+\end{itemize}
+
+\subsection{Generalization Quality}
+
+All three models demonstrated different generalization characteristics:
+\begin{itemize}
+    \item \textbf{Ridge}: Excellent generalization (test $\approx$ training) but limited capacity (R² = 0.41)
+    \item \textbf{SVR}: Good balance with minimal overfitting (test RMSE only 2\% worse than training)
+    \item \textbf{MLP}: Strong generalization despite complexity (test RMSE actually better than CV)
+\end{itemize}
+
+The MLP's superior test performance compared to CV suggests that the cross-validation folds may have included some particularly challenging periods, and the model generalized well to the final test set.
+
+\subsection{Feature Importance Insights}
+
+Based on exploratory data analysis and model behavior:
+\begin{itemize}
+    \item \textbf{Hour of day}: Most influential predictor, capturing commute patterns (peaks at 8 AM and 5-6 PM)
+    \item \textbf{Temperature}: Strong positive correlation with rentals, with nonlinear relationship
+    \item \textbf{Weather conditions}: Clear weather significantly increases rentals compared to rain/snow
+    \item \textbf{Weekday vs Weekend}: Different usage patterns (commute vs leisure)
+\end{itemize}
+
+\subsection{Limitations}
+
+\textbf{1. Data Limitations}: Single year of data may not capture long-term trends, seasonal variations across multiple years, or the impact of external events (holidays, festivals, construction).
+
+\textbf{2. Missing Values}: The dataset contained missing values requiring imputation, which introduces some uncertainty. More sophisticated imputation methods (e.g., KNN imputation) could potentially improve results.
+
+\textbf{3. Feature Engineering}: Limited to provided features. Additional engineered features could improve performance:
+\begin{itemize}
+    \item Cyclical encoding for temporal features (sin/cos transformations)
+    \item Interaction terms (temperature $\times$ hour)
+    \item Lag features (previous hour's rentals)
+    \item Holiday indicators
+\end{itemize}
+
+\textbf{4. Model Complexity}: MLP training time is significantly longer than Ridge or SVR. For real-time deployment, this trade-off between accuracy and computational cost must be considered.
+
+\subsection{Future Work}
+
+\textbf{1. Feature Engineering}: Create interaction terms and cyclical encoding for temporal features to better capture periodic patterns.
+
+\textbf{2. Additional Models}: Ensemble methods like Random Forest and Gradient Boosting (XGBoost, LightGBM) often perform well on tabular data and could potentially match or exceed MLP performance.
+
+\textbf{3. Time Series Analysis}: Incorporate temporal dependencies using LSTM networks or ARIMA models to capture sequential patterns.
+
+\textbf{4. External Data}: Include holidays, special events, traffic patterns, and weather forecasts to improve prediction accuracy.
+
+\textbf{5. Spatial Analysis}: If station-level data is available, incorporate geographic features and station-specific patterns.
+
+\section{Conclusion}
+\label{conclusion}
+
+This project successfully developed and compared three machine learning models for predicting hourly bike rentals. The \textbf{Multi-Layer Perceptron (MLP)} achieved the lowest test RMSE of \textbf{41.06 bikes/hour} and highest R² of \textbf{0.9055}, demonstrating excellent predictive performance. Key findings include:
+
+\textbf{1. Model complexity matters}: Progressive improvement from linear (Ridge) $\rightarrow$ kernel-based (SVR) $\rightarrow$ neural network (MLP) demonstrates the importance of capturing nonlinear relationships in bike rental patterns.
+
+\textbf{2. Temporal features are critical}: Hour of day, weekday, and month strongly influence rental patterns, with neural networks effectively learning these complex temporal interactions.
+
+\textbf{3. Weather significantly impacts demand}: Temperature, humidity, and weather conditions are key predictors that the MLP successfully incorporates into its decision-making.
+
+\textbf{4. Proper methodology ensures reliability}: Pipeline-based preprocessing, 5-fold cross-validation for hyperparameter tuning, and held-out test set evaluation provide unbiased performance estimates.
+
+\subsection{Practical Impact}
+
+The developed MLP model can assist bike-sharing operators in:
+\begin{itemize}
+    \item \textbf{Demand forecasting}: Predict hourly rentals with $\sim$90\% accuracy (R² = 0.9055)
+    \item \textbf{Resource optimization}: Distribute bikes across stations based on predicted demand
+    \item \textbf{Maintenance planning}: Schedule maintenance during predicted low-demand periods
+    \item \textbf{Service quality}: Ensure bike availability during peak hours (morning/evening commutes)
+\end{itemize}
+
+\subsection{Model Performance Summary}
+\begin{itemize}
+    \item Ridge Regression: RMSE = 102.38 (baseline)
+    \item SVR: RMSE = 84.53 (17.4\% improvement)
+    \item \textbf{MLP: RMSE = 41.06 (59.9\% improvement)}
+\end{itemize}
+
+All models were developed following best practices with proper train-test splits, cross-validation, and single-use test set evaluation to ensure unbiased performance estimates. The nearly unbiased residuals (mean = 1.66) and excellent R² score validate the MLP as a robust solution for bike-sharing demand forecasting.
+
+\section*{Acknowledgments}
+
+AI tools (Google Gemini) were used to assist with documentation. Help me understand what hyperparameter tuning is for the Ridge model.
+
+\bibliographystyle{IEEEtran}
+\begin{thebibliography}{00}
+
+\bibitem{ridge}
+A. E. Hoerl and R. W. Kennard, ``Ridge regression: Biased estimation for nonorthogonal problems,'' \textit{Technometrics}, vol. 12, no. 1, pp. 55--67, 1970.
+
+\bibitem{svr}
+A. Géron, ``Support Vector Machines,'' in \textit{Hands-On Machine Learning with Scikit-Learn, Keras and TensorFlow}, 3rd ed., O'Reilly Media, 2023, ch. 5.
+
+\bibitem{mlp}
+A. Géron, ``Introduction to Artificial Neural Networks with Keras,'' in \textit{Hands-On Machine Learning with Scikit-Learn, Keras and TensorFlow}, 3rd ed., O'Reilly Media, 2023, ch. 10.
+
+\end{thebibliography}
+
+\end{document}
+
